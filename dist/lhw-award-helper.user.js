@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LHW Award Helper
 // @namespace    https://github.com/hmumixaM/lhw-award-helper
-// @version      2.3.1
+// @version      2.4.0
 // @description  解除 lhw.com 积分房的 disabled 置灰，并就地显示 Cents per point（含 Amex 1:4 换算）
 // @author       hmumixaM
 // @match        *://www.lhw.com/*
@@ -275,11 +275,29 @@
 
     /* 可排序的列。dir 是首次点该列时的方向：价值类默认从高到低，
        所需积分默认从低到高（先看换得起的）。¢/MR 与 ¢/分 的顺序其实等价，
-       但单独成键才能把箭头标在被点的那一列上。 */
+       但单独成键才能把箭头标在被点的那一列上。
+
+       get 取的是【显示出来的那个值】（四舍五入到表格里的精度）。因为并列
+       与否要以用户看到的为准 —— 7.0712 和 7.0689 都印成 7.07，若按原始值
+       比较，这两行明明看着一样却仍分先后，次级排序就像没生效。
+
+       tie 是并列时的次级列，方向固定用它自己的 dir：CPP 相同就先给要分少
+       的，所需积分相同就先给更值钱的。 */
+    const r2 = v => Math.round(v * 100) / 100;
     const SORTS = {
-        cpp: { label: '¢/分', get: e => e.info.cpp, dir: -1 },
-        amex: { label: 'MR', get: e => e.info.amex, dir: 1 },
-        amexCpp: { label: '¢/MR', get: e => e.info.amexCpp, dir: -1 },
+        cpp: { label: '¢/分', get: e => r2(e.info.cpp), dir: -1, tie: 'amex' },
+        amex: { label: 'MR', get: e => Math.round(e.info.amex), dir: 1, tie: 'cpp' },
+        amexCpp: { label: '¢/MR', get: e => r2(e.info.amexCpp), dir: -1, tie: 'amex' },
+    };
+
+    const cmp = (a, b) => {
+        const s = SORTS[sortK];
+        let d = (s.get(a) - s.get(b)) * sortD;
+        if (!d && s.tie) {
+            const t = SORTS[s.tie];
+            d = (t.get(a) - t.get(b)) * t.dir;
+        }
+        return d || String(a.name).localeCompare(String(b.name));   // 兜底，保证顺序稳定
     };
 
     let panel, rowsRef = [], sortK = 'cpp', sortD = SORTS.cpp.dir;
@@ -350,8 +368,7 @@
             return;
         }
 
-        const pick = SORTS[sortK].get;
-        const rows = raw.slice().sort((a, b) => (pick(a) - pick(b)) * sortD);
+        const rows = raw.slice().sort(cmp);
         rowsRef = rows;
 
         // 小按钮始终报当前页最好的 CPP，与表格排序无关
