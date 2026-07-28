@@ -1,0 +1,18 @@
+{
+  "name": "lhw-award-helper",
+  "version": "2.0.0",
+  "description": "解除 lhw.com 积分房的 disabled 置灰，并就地显示 Cents per point（含 Amex 1:4 换算）",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hmumixaM/lhw-award-helper.git"
+  },
+  "homepage": "https://github.com/hmumixaM/lhw-award-helper",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "terser": "^5.49.0"
+  }
+}
