@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LHW Award Helper
 // @namespace    https://github.com/hmumixaM/lhw-award-helper
-// @version      2.1.0
+// @version      2.2.0
 // @description  解除 lhw.com 积分房的 disabled 置灰，并就地显示 Cents per point（含 Amex 1:4 换算）
 // @author       hmumixaM
 // @match        *://www.lhw.com/*
@@ -29,7 +29,8 @@
     };
 
     const OPEN_KEY = 'lhw-cpp-panel-open';
-    const SCHEMA = 'v3';    // 表格结构版本，改列后强制重绘
+    const SORT_KEY = 'lhw-cpp-panel-sort';
+    const SCHEMA = 'v4';    // 表格结构版本，改列后强制重绘
 
     const num = v => parseFloat(String(v == null ? '' : v).replace(/,/g, '')) || 0;
     const fmt = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -144,7 +145,7 @@
             `    = ${info.cpp.toFixed(3)}¢ / LHW 分　=　${info.amexCpp.toFixed(3)}¢ / Amex MR`;
     }
 
-    /* 全量扫描：顺带画徽章，并返回按 CPP 降序的排行数据 */
+    /* 全量扫描：顺带画徽章，返回排行数据（排序交给面板） */
     function collect() {
         const rows = [];
         document.querySelectorAll('.rate, article.hotel').forEach(el => {
@@ -153,12 +154,31 @@
             paint(e);
             rows.push(e);
         });
-        return rows.sort((a, b) => b.info.cpp - a.info.cpp);
+        return rows;
     }
 
     /* ---- 右下角排行面板，默认收起成一个小按钮 ---- */
 
-    let panel, rowsRef = [];
+    /* 可排序的列。dir 是首次点该列时的方向：价值类默认从高到低，
+       所需积分默认从低到高（先看换得起的）。¢/MR 与 ¢/分 的顺序其实等价，
+       但单独成键才能把箭头标在被点的那一列上。 */
+    const SORTS = {
+        cpp: { label: '¢/分', get: e => e.info.cpp, dir: -1 },
+        amex: { label: 'MR', get: e => e.info.amex, dir: 1 },
+        amexCpp: { label: '¢/MR', get: e => e.info.amexCpp, dir: -1 },
+    };
+
+    let panel, rowsRef = [], sortK = 'cpp', sortD = SORTS.cpp.dir;
+
+    function saveSort() {
+        try { localStorage.setItem(SORT_KEY, sortK + ':' + sortD); } catch (_) { /* 隐私模式 */ }
+    }
+    function loadSort() {
+        try {
+            const [k, d] = String(localStorage.getItem(SORT_KEY) || '').split(':');
+            if (SORTS[k]) { sortK = k; sortD = +d === 1 ? 1 : -1; }
+        } catch (_) { /* 隐私模式 */ }
+    }
 
     function buildPanel() {
         panel = document.createElement('div');
@@ -168,7 +188,7 @@
             '<div class="lhw-box">' +
             '<div class="lhw-hd"><span>CPP 排行</span><button class="lhw-x" type="button">×</button></div>' +
             '<div class="lhw-scroll"><table></table></div>' +
-            `<div class="lhw-ft">Amex ${CONFIG.amexRatio}:1 · 已扣积分房税费 · 悬停徽章看推导</div>` +
+            `<div class="lhw-ft">Amex ${CONFIG.amexRatio}:1 · 已扣积分房税费 · 点表头可排序</div>` +
             '</div>';
         document.body.appendChild(panel);
 
@@ -179,8 +199,19 @@
         panel.querySelector('.lhw-tog').addEventListener('click', () => setOpen(!panel.classList.contains('lhw-open')));
         panel.querySelector('.lhw-x').addEventListener('click', () => setOpen(false));
 
-        // 点击行滚动到对应房型/酒店并高亮
         panel.querySelector('table').addEventListener('click', ev => {
+            // 点表头切换排序：同一列再点一次反向
+            const th = ev.target.closest('th[data-k]');
+            if (th) {
+                const k = th.dataset.k;
+                if (k === sortK) sortD = -sortD;
+                else { sortK = k; sortD = SORTS[k].dir; }
+                saveSort();
+                panel.dataset.sig = '';     // 数据没变，强制重绘
+                renderPanel(collect());
+                return;
+            }
+            // 点行滚动到对应房型/酒店并高亮
             const tr = ev.target.closest('tr[data-i]');
             if (!tr) return;
             const e = rowsRef[+tr.dataset.i];
@@ -190,26 +221,37 @@
             setTimeout(() => e.el.classList.remove('lhw-flash'), 1400);
         });
 
+        loadSort();
         let open = false;
         try { open = localStorage.getItem(OPEN_KEY) === '1'; } catch (_) { /* 隐私模式 */ }
         if (open) panel.classList.add('lhw-open');
     }
 
-    function renderPanel(rows) {
+    function renderPanel(raw) {
         if (!CONFIG.panel || !document.body) return;
         if (!panel) buildPanel();
 
-        panel.style.display = rows.length ? '' : 'none';
-        if (!rows.length) return;
+        panel.style.display = raw.length ? '' : 'none';
+        if (!raw.length) return;
+
+        const pick = SORTS[sortK].get;
+        const rows = raw.slice().sort((a, b) => (pick(a) - pick(b)) * sortD);
         rowsRef = rows;
 
-        const sig = SCHEMA + rows.map(e => e.name + e.info.cpp.toFixed(2)).join('|');
+        const sig = `${SCHEMA}|${sortK}|${sortD}|` + rows.map(e => e.name + e.info.cpp.toFixed(2)).join('|');
         if (panel.dataset.sig === sig) return;
         panel.dataset.sig = sig;
 
-        panel.querySelector('.lhw-tog').textContent = `CPP ${rows[0].info.cpp.toFixed(2)}¢`;
+        // 小按钮始终报当前页最好的 CPP，与表格排序无关
+        panel.querySelector('.lhw-tog').textContent =
+            `CPP ${Math.max(...rows.map(e => e.info.cpp)).toFixed(2)}¢`;
         panel.querySelector('table').innerHTML =
-            '<thead><tr><th></th><th>名称</th><th>¢/分</th><th>MR</th><th>¢/MR</th></tr></thead><tbody>' +
+            '<thead><tr><th></th><th>名称</th>' +
+            Object.keys(SORTS).map(k =>
+                `<th data-k="${k}" class="lhw-th${k === sortK ? ' lhw-on' : ''}">` +
+                `${SORTS[k].label}${k === sortK ? (sortD < 0 ? ' ▾' : ' ▴') : ''}</th>`
+            ).join('') +
+            '</tr></thead><tbody>' +
             rows.map((e, i) => {
                 const c = e.info.cpp >= CONFIG.good ? 'lhw-g' : e.info.cpp >= CONFIG.ok ? 'lhw-k' : 'lhw-l';
                 return `<tr data-i="${i}" title="${esc(e.name)}">` +
@@ -285,6 +327,9 @@
             font-weight: 600; text-align: right; padding: 5px 7px; border-bottom: 1px solid #e6e9ec;
         }
         #lhw-panel th:nth-child(2) { text-align: left; }
+        #lhw-panel .lhw-th { cursor: pointer; user-select: none; white-space: nowrap; }
+        #lhw-panel .lhw-th:hover { background: #eceff2; color: #23282e; }
+        #lhw-panel .lhw-on { color: #2c4a63; }
         #lhw-panel td { padding: 5px 7px; border-bottom: 1px solid #f0f2f4; text-align: right; }
         #lhw-panel tbody tr { cursor: pointer; }
         #lhw-panel tbody tr:hover { background: #f6f9fc; }

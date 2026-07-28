@@ -1,6 +1,6 @@
 {
   "name": "lhw-award-helper",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "解除 lhw.com 积分房的 disabled 置灰，并就地显示 Cents per point（含 Amex 1:4 换算）",
   "type": "module",
   "license": "MIT",
