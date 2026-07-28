@@ -10,7 +10,10 @@
         ok: 3.0,
         hideWarning: false, // 隐藏 "Not enough points" 文字
         panel: true,        // 右下角排行面板
+        prefetch: true,     // 搜索页静默补全所有酒店房价（见下方 prefetch）
     };
+
+    const MAX_INFLIGHT = 4; // 同时在途的房价请求数，别把人家服务器打疼
 
     const OPEN_KEY = 'lhw-cpp-panel-open';
     const SORT_KEY = 'lhw-cpp-panel-sort';
@@ -141,6 +144,107 @@
         return rows;
     }
 
+    /* ---- 搜索页：静默补全所有酒店的房价 ----
+
+       LHW 一次就把整个搜索结果的酒店列表下发了（滚到底也不会变多），
+       按滚动懒加载的只是每家的 availability —— 所以「要翻好几页才看得全」
+       其实是价格在慢慢冒出来。这里直接派发 store 的 loadHotelAvailability，
+       不制造任何滚动，页面不会在用户眼皮底下乱跳。 */
+
+    const PF = { on: false, done: 0, total: 0 };
+    const sent = new Map();     // code -> 发出时刻
+    const REQ_TTL = 20000;      // 这么久还没回填就当它没了，可以重发
+    let searchSig = '';
+    let pumpTimer = null;
+
+    const storeOf = () => {
+        const a = document.querySelector('article.hotel');
+        return (a && a.__vue__ && a.__vue__.$store) || null;
+    };
+
+    /* 跑一轮，返回「是否还有活要干」。
+
+       注意 dispatch 兑现得比数据回填早得多（实测 2ms vs 105ms），拿它当
+       完成信号既会让并发上限失效、又会让同一家被立刻重排，所以在途与否
+       一律以 availability 有没有落地为准。 */
+    function pumpOnce() {
+        const st = storeOf();
+        if (!st || !st.getters) return false;
+
+        // 换了日期/地区/筛选就重新开始（旧的 availability 会被清空）
+        const sig = location.pathname + location.search;
+        if (sig !== searchSig) { searchSig = sig; sent.clear(); }
+
+        const hotels = st.getters.getHotels || [];
+        if (!hotels.length) return false;
+
+        const now = Date.now();
+        let live = 0;
+        const queue = [];
+        for (const h of hotels) {
+            const c = h && h.sabreBookingCode;
+            if (!c || h.availability) continue;
+            const ts = sent.get(c);
+            if (ts == null || now - ts > REQ_TTL) queue.push(c);
+            else live++;
+        }
+
+        for (const c of queue.slice(0, Math.max(0, MAX_INFLIGHT - live))) {
+            sent.set(c, now);
+            Promise.resolve()
+                .then(() => st.dispatch('loadHotelAvailability', c))
+                .catch(() => { sent.delete(c); });   // 单家失败不影响其它，下轮再排
+        }
+
+        PF.total = hotels.length;
+        PF.done = hotels.filter(h => h && h.availability).length;
+        PF.on = live > 0 || queue.length > 0;
+        return PF.on;
+    }
+
+    function prefetch() {
+        if (!CONFIG.prefetch || pumpTimer) return;
+        if (!pumpOnce()) return;
+        pumpTimer = setInterval(() => {
+            if (!pumpOnce()) { clearInterval(pumpTimer); pumpTimer = null; }
+        }, 300);
+    }
+
+    /* 搜索页只「显示」前 app.visibleLimit 家（默认 10，滚动才 +10），
+       其余 article.hotel 是 display:none —— 没有布局盒子，scrollIntoView
+       对它无效。所以定位前先用官方 mutation 把它放出来，再等排版完成。 */
+    function reveal(el) {
+        const st = storeOf();
+        const i = el.__vue__ && el.__vue__.index;
+        if (st && st.state.app && typeof i === 'number') {
+            let guard = 0;
+            while (st.state.app.visibleLimit <= i && guard++ < 500) {
+                st.commit('increaseVisibleLimit');
+            }
+        }
+        return new Promise(done => {
+            let n = 0;
+            const wait = () => (el.getBoundingClientRect().height > 0 || ++n > 60)
+                ? done() : requestAnimationFrame(wait);
+            wait();
+        });
+    }
+
+    function locate(e) {
+        if (!e || !e.el || !e.el.isConnected) return;
+        const el = e.el;
+        reveal(el).then(() => {
+            el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            el.classList.add('lhw-flash');
+            setTimeout(() => el.classList.remove('lhw-flash'), 1400);
+            // 新放出来的卡片图片陆续撑开高度，目标容易被挤走，落定后再校一次
+            setTimeout(() => {
+                const r = el.getBoundingClientRect();
+                if (r.top < 0 || r.bottom > innerHeight) el.scrollIntoView({ block: 'center' });
+            }, 700);
+        });
+    }
+
     /* ---- 右下角排行面板，默认收起成一个小按钮 ---- */
 
     /* 可排序的列。dir 是首次点该列时的方向：价值类默认从高到低，
@@ -172,7 +276,7 @@
             '<div class="lhw-box">' +
             '<div class="lhw-hd"><span>CPP 排行</span><button class="lhw-x" type="button">×</button></div>' +
             '<div class="lhw-scroll"><table></table></div>' +
-            `<div class="lhw-ft">Amex ${CONFIG.amexRatio}:1 · 已扣积分房税费 · 点表头可排序</div>` +
+            `<div class="lhw-ft">Amex ${CONFIG.amexRatio}:1 · 已扣税费 · 点表头排序 · 点行定位</div>` +
             '</div>';
         document.body.appendChild(panel);
 
@@ -195,14 +299,9 @@
                 renderPanel(collect());
                 return;
             }
-            // 点行滚动到对应房型/酒店并高亮
+            // 点行定位到对应房型/酒店并高亮
             const tr = ev.target.closest('tr[data-i]');
-            if (!tr) return;
-            const e = rowsRef[+tr.dataset.i];
-            if (!e || !e.el.isConnected) return;
-            e.el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-            e.el.classList.add('lhw-flash');
-            setTimeout(() => e.el.classList.remove('lhw-flash'), 1400);
+            if (tr) locate(rowsRef[+tr.dataset.i]);
         });
 
         loadSort();
@@ -215,20 +314,27 @@
         if (!CONFIG.panel || !document.body) return;
         if (!panel) buildPanel();
 
-        panel.style.display = raw.length ? '' : 'none';
-        if (!raw.length) return;
+        const tog = panel.querySelector('.lhw-tog');
+        const loading = PF.on && PF.total;
+
+        // 补房价期间保持可见，让用户知道榜单还在长
+        panel.style.display = (raw.length || loading) ? '' : 'none';
+        if (!raw.length) {
+            if (loading) tog.textContent = `CPP 载入 ${PF.done}/${PF.total}`;
+            return;
+        }
 
         const pick = SORTS[sortK].get;
         const rows = raw.slice().sort((a, b) => (pick(a) - pick(b)) * sortD);
         rowsRef = rows;
 
+        // 小按钮始终报当前页最好的 CPP，与表格排序无关
+        const best = Math.max(...rows.map(e => e.info.cpp)).toFixed(2);
+        tog.textContent = loading ? `CPP ${best}¢ · ${PF.done}/${PF.total}` : `CPP ${best}¢`;
+
         const sig = `${SCHEMA}|${sortK}|${sortD}|` + rows.map(e => e.name + e.info.cpp.toFixed(2)).join('|');
         if (panel.dataset.sig === sig) return;
         panel.dataset.sig = sig;
-
-        // 小按钮始终报当前页最好的 CPP，与表格排序无关
-        panel.querySelector('.lhw-tog').textContent =
-            `CPP ${Math.max(...rows.map(e => e.info.cpp)).toFixed(2)}¢`;
         panel.querySelector('table').innerHTML =
             '<thead><tr><th></th><th>名称</th>' +
             Object.keys(SORTS).map(k =>
@@ -341,10 +447,11 @@
         childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'],
     });
 
-    // 搜索页可用性数据随滚动懒加载，文本更新不一定触发上面的监听
+    // 搜索页可用性数据异步回填，文本更新不一定触发上面的监听
     const tick = () => {
         if (!document.body) return;
         sweep(document.body);
+        prefetch();
         renderPanel(collect());
     };
     document.addEventListener('DOMContentLoaded', tick);
