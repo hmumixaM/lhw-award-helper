@@ -39,7 +39,7 @@ CPP = (410.68 − 87.79) ÷ 6,614 × 100
 
 ### Bookmarklet
 
-打开 **[dist/install.html](dist/install.html)**（下载到本地用浏览器打开即可），把页面上的按钮拖到书签栏。
+打开安装页 **<https://hmumixam.github.io/lhw-award-helper/dist/install.html>**，把页面上的按钮拖到书签栏。
 
 拖不动的话（部分浏览器禁止拖拽 `javascript:` 链接），手动新建书签，把 [dist/bookmarklet.txt](dist/bookmarklet.txt) 的全部内容粘贴到「网址」栏。
 
