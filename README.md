@@ -1,6 +1,6 @@
 # LHW Award Helper
 
-给 [lhw.com](https://www.lhw.com)（Leading Hotels of the World / Leaders Club）加两个东西：
+给 [lhw.com](https://www.lhw.com)（Leading Hotels of the World / Leaders Club）加三个东西：
 
 1. **解除积分不足的置灰** —— 积分余额不够时，积分兑换房的 `Select` 按钮会被禁用，看不到也点不了。脚本移除该限制。
 2. **就地显示 CPP（Cents per point）** —— 在城市搜索页的每家酒店、房型页的每个积分房价旁，标出每积分值多少美分，并按 Amex 4:1 一并给出需要多少 MR、折合每 MR 多少美分。
@@ -16,7 +16,11 @@
 
 徽章分两行。主行是 LHW 每分价值，副行是转点视角：这段住期一共要转多少 MR、折合每 MR 值多少美分。**副行是整段住期合计**，因为 LHW 页面上那个大号积分数是 `avg/night`，两者口径不同，所以多于一晚时会显式标出晚数（如 `2晚`）。
 
-点右下角的小按钮展开排行：
+面板默认收在右下角，只是一个小按钮，上面直接写着当前页最好的 CPP：
+
+![收起态](docs/toggle.png)
+
+点开是完整排行：
 
 ![排行面板](docs/panel.png)
 
