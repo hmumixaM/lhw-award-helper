@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LHW Award Helper
 // @namespace    https://github.com/hmumixaM/lhw-award-helper
-// @version      2.3.0
+// @version      2.3.1
 // @description  解除 lhw.com 积分房的 disabled 置灰，并就地显示 Cents per point（含 Amex 1:4 换算）
 // @author       hmumixaM
 // @match        *://www.lhw.com/*
@@ -29,7 +29,10 @@
         prefetch: true,     // 搜索页静默补全所有酒店房价（见下方 prefetch）
     };
 
-    const MAX_INFLIGHT = 4; // 同时在途的房价请求数，别把人家服务器打疼
+    // 同时在途的房价请求数。页面自己每展开一批就会并发 10 个，取齐这个数
+    // 既不比正常滚动更激进，又能让整片区域（欧洲 300+ 家）在半分钟内补完。
+    const MAX_INFLIGHT = 10;
+    const PUMP_MS = 200;    // 补位间隔，太长会让并发槽白等
 
     const OPEN_KEY = 'lhw-cpp-panel-open';
     const SORT_KEY = 'lhw-cpp-panel-sort';
@@ -223,7 +226,7 @@
         if (!pumpOnce()) return;
         pumpTimer = setInterval(() => {
             if (!pumpOnce()) { clearInterval(pumpTimer); pumpTimer = null; }
-        }, 300);
+        }, PUMP_MS);
     }
 
     /* 搜索页只「显示」前 app.visibleLimit 家（默认 10，滚动才 +10），
@@ -252,12 +255,19 @@
         reveal(el).then(() => {
             el.scrollIntoView({ block: 'center', behavior: 'smooth' });
             el.classList.add('lhw-flash');
-            setTimeout(() => el.classList.remove('lhw-flash'), 1400);
-            // 新放出来的卡片图片陆续撑开高度，目标容易被挤走，落定后再校一次
-            setTimeout(() => {
+
+            /* 一次放出上百张卡片后，图片是陆续加载的，文档高度一直在长，
+               目标很容易被挤到视口边缘。所以落定过程中再校两次位置，
+               两次都在高亮消失之前，用户看得到它最终停在哪。 */
+            const settle = () => {
                 const r = el.getBoundingClientRect();
-                if (r.top < 0 || r.bottom > innerHeight) el.scrollIntoView({ block: 'center' });
-            }, 700);
+                if (Math.abs((r.top + r.bottom) / 2 - innerHeight / 2) > innerHeight * 0.35) {
+                    el.scrollIntoView({ block: 'center' });
+                }
+            };
+            setTimeout(settle, 500);
+            setTimeout(settle, 1300);
+            setTimeout(() => el.classList.remove('lhw-flash'), 2200);
         });
     }
 
